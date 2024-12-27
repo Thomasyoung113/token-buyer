@@ -15,6 +15,16 @@ interface TokenBuyerLike {
     ) external;
 }
 
+interface STETHTokenBuyerLike {
+    function buySTETH(uint256 tokenAmountWAD) external;
+
+    function buySTETH(
+        uint256 tokenAmountWAD,
+        address to,
+        bytes calldata data
+    ) external;
+}
+
 contract MaliciousBuyer is IBuyETHCallback {
     TokenBuyerLike buyer;
     IERC20 token;
@@ -63,6 +73,50 @@ contract MaliciousBuyer is IBuyETHCallback {
         } else {
             token.approve(address(buyer), amount);
             buyer.buyETH(amount);
+        }
+    }
+}
+
+contract STETHMaliciousBuyer is IBuyETHCallback {
+    STETHTokenBuyerLike buyer;
+    IERC20 token;
+    bool calledTwice;
+    bool reenterWithCallback;
+
+    constructor(address _buyer, IERC20 _token) {
+        buyer = STETHTokenBuyerLike(_buyer);
+        token = _token;
+    }
+
+    function attack(uint256 tokenAmountWAD) public {
+        buyer.buySTETH(tokenAmountWAD);
+    }
+
+    function reenterBuyWithCallback(uint256 tokenAmountWAD) public {
+        reenterWithCallback = true;
+        buyer.buySTETH(tokenAmountWAD, address(this), '');
+    }
+
+    function reenterBuyNoCallback(uint256 tokenAmountWAD) public {
+        reenterWithCallback = false;
+        buyer.buySTETH(tokenAmountWAD, address(this), '');
+    }
+
+    function buyETHCallback(
+        address,
+        uint256 amount,
+        bytes calldata
+    ) external payable {
+        if (reenterWithCallback) {
+            if (!calledTwice) {
+                calledTwice = true;
+                buyer.buySTETH(amount, address(this), '');
+            } else {
+                token.transfer(address(buyer), amount);
+            }
+        } else {
+            token.approve(address(buyer), amount);
+            buyer.buySTETH(amount);
         }
     }
 }
