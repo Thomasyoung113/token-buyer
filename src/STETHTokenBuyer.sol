@@ -302,24 +302,24 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
     }
 
     /// @notice Returns the amount of tokens the contract can buy and the amount of STETH it will pay for it
-    /// This takes into account the current STETH balance this contract has
+    /// This takes into account the current STETH allowance this contract has
     /// @return tokenAmount amount of tokens the contract can buy
-    /// @return ethAmount amount of STETH it will pay for the tokens
+    /// @return stethAmount amount of STETH it will pay for the tokens
     function tokenAmountNeededAndSTETHPayout() public view returns (uint256, uint256) {
         uint256 tokenAmount = tokenAmountNeeded();
-        uint256 ethAmount = stethAmountPerTokenAmount(tokenAmount);
-        uint256 ethAvailable = address(this).balance;
+        uint256 stethAmount = stethAmountPerTokenAmount(tokenAmount);
+        uint256 stethAvailable = stETH.allowance(treasury, address(this));
 
-        if (ethAvailable >= ethAmount) {
-            return (tokenAmount, ethAmount);
+        if (stethAvailable >= stethAmount) {
+            return (tokenAmount, stethAmount);
         } else {
             // Tokens amount will be rounded down to avoid trying to buy more eth than available
-            tokenAmount = tokenAmountPerSTEthAmount(ethAvailable);
+            tokenAmount = tokenAmountPerSTEthAmount(stethAvailable);
 
             // Recalculate eth amount because tokens amount are rounded down
-            ethAmount = stethAmountPerTokenAmount(tokenAmount);
+            stethAmount = stethAmountPerTokenAmount(tokenAmount);
 
-            return (tokenAmount, ethAmount);
+            return (tokenAmount, stethAmount);
         }
     }
 

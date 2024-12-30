@@ -204,7 +204,8 @@ contract STETHTokenBuyerTest is Test {
     }
 
     function test_tokenAmountNeededAndETHPayout_baselineAmountOnly() public {
-        vm.deal(address(buyer), 50 ether);
+        vm.prank(treasury);
+        stETH.approve(address(buyer), 50 ether);
 
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(100_000e18);
@@ -231,14 +232,15 @@ contract STETHTokenBuyerTest is Test {
             _owner: owner,
             _admin: admin,
             _payer: address(payer),
-            _stETH: address(0),
-            _treasury: address(0)
+            _stETH: address(stETH),
+            _treasury: treasury
         });
 
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(100_000e6);
 
-        vm.deal(address(buyer), 8 ether);
+        vm.prank(treasury);
+        stETH.approve(address(buyer), 8 ether);
 
         priceFeed.setPrice(1350717518812290000000);
         (uint256 tokenAmount, uint256 ethAmount) = buyer.tokenAmountNeededAndSTETHPayout();
@@ -249,13 +251,13 @@ contract STETHTokenBuyerTest is Test {
     }
 
     function test_tokenAmountNeededAndETHPayout_lowersTokensIfItBuysMoreEthThanAvailable_fuzz(
-        uint256 ethBalance,
+        uint256 stethAllowance,
         uint256 price,
         uint256 decimals,
         uint256 tokensNeeded
     ) public {
         decimals = bound(decimals, 6, 18);
-        ethBalance = bound(ethBalance, 0, 1e12 ether);
+        stethAllowance = bound(stethAllowance, 0, 1e12 ether);
         price = bound(price, 1e18, 1e9 * 1e18);
         tokensNeeded = bound(tokensNeeded, 0, (10_000_000 * 10) ^ decimals);
 
@@ -273,14 +275,15 @@ contract STETHTokenBuyerTest is Test {
             _owner: owner,
             _admin: admin,
             _payer: address(payer),
-            _stETH: address(0),
-            _treasury: address(0)
+            _stETH: address(stETH),
+            _treasury: treasury
         });
 
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(tokensNeeded);
 
-        vm.deal(address(buyer), ethBalance);
+        vm.prank(treasury);
+        stETH.approve(address(buyer), stethAllowance);
 
         priceFeed.setPrice(price);
         (uint256 tokenAmount, uint256 ethAmount) = buyer.tokenAmountNeededAndSTETHPayout();
@@ -291,7 +294,8 @@ contract STETHTokenBuyerTest is Test {
     }
 
     function test_tokenAmountNeededAndETHPayout_lessEthAvailable() public {
-        vm.deal(address(buyer), 5 ether);
+        vm.prank(treasury);
+        stETH.approve(address(buyer), 5 ether);
 
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(100_000e18);
