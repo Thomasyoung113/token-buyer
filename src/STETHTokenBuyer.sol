@@ -250,21 +250,18 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
      */
 
-    /// @notice Get how much STETH this contract needs in order to fund its current obligations plus `additionalTokens`, with
-    /// a safety buffer `bufferBPs` basis points.
+    /// @notice Get how much additional STETH allowance this contract needs in order to fund its current obligations plus `additionalTokens`.
     /// @param additionalTokens an additional amount of `paymentToken` liability to use in this STETH requirement calculation, in payment token decimals.
-    /// @param bufferBPs the number of basis points to add on top of the token liability price in STETH as a safety buffer, e.g.
-    /// if `bufferBPs` is 10K, the function will return twice the amount it needs according to price alone.
-    /// @return the amount of STETH needed
-    function stethNeeded(uint256 additionalTokens, uint256 bufferBPs) public view returns (uint256) {
+    /// @return the amount of additional STETH allowance needed
+    function stethNeeded(uint256 additionalTokens) public view returns (uint256) {
         uint256 tokenAmount = tokenAmountNeeded() + additionalTokens;
         uint256 ethCostOfTokens = stethAmountPerTokenAmount(tokenAmount);
-        uint256 ethCostWithBuffer = (ethCostOfTokens * (bufferBPs + 10_000)) / 10_000;
+        uint256 stETHAllowance = stETH.allowance(treasury, address(this));
 
-        if (address(this).balance > ethCostWithBuffer) {
+        if (stETHAllowance > ethCostOfTokens) {
             return 0;
         } else {
-            return ethCostWithBuffer - address(this).balance;
+            return ethCostOfTokens - stETHAllowance;
         }
     }
 

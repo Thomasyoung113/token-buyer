@@ -999,23 +999,24 @@ contract STETHTokenBuyerTest is Test {
         buyer.setMaxAdminBaselinePaymentTokenAmount(42);
     }
 
-    function test_ethNeeded() public {
+    function test_stethNeeded() public {
         priceFeed.setPrice(1400e18);
 
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(1_000e18);
 
-        uint256 ethNeeded = buyer.stethNeeded(100e18, 5000);
-        assertApproxEqAbs(ethNeeded, 1.178571429e18, 0.00001e18);
+        uint256 ethNeeded = buyer.stethNeeded(100e18);
+        assertApproxEqAbs(ethNeeded, 0.785714286e18, 0.00001e18);
     }
 
-    function test_ethNeededIsZeroIfNothingNeeded() public {
+    function test_stethNeededIsZeroIfNothingNeeded() public {
         priceFeed.setPrice(1400e18);
 
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(1_000e18);
 
-        vm.deal(address(buyer), 1.18 ether);
-        assertEq(buyer.stethNeeded(100e18, 5000), 0);
+        vm.prank(treasury);
+        stETH.approve(address(buyer), 0.8 ether);
+        assertEq(buyer.stethNeeded(100e18), 0);
     }
 }
