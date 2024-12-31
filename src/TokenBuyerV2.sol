@@ -22,15 +22,15 @@ import { SafeERC20 } from 'openzeppelin-contracts/contracts/token/ERC20/utils/Sa
 import { ReentrancyGuard } from 'openzeppelin-contracts/contracts/security/ReentrancyGuard.sol';
 import { Math } from 'openzeppelin-contracts/contracts/utils/math/Math.sol';
 import { IPriceFeed } from './IPriceFeed.sol';
-import { IBuyETHCallback } from './IBuyETHCallback.sol';
+import { ISwapTokensCallback } from './ISwapTokensCallback.sol';
 import { IPayer } from './IPayer.sol';
 
-/// @title STETHTokenBuyer
-/// @notice Buys ERC20 tokens for STETH at oracle prices
+/// @title TokenBuyerV2
+/// @notice Buys a payment ERC20 token for another ERC20 at oracle prices
 /// It limits the amount of tokens it wants to buy using 2 factors:
 ///     1. The amount of debt registered in a `Payer` contract
 ///     2. A minimal "buffer" amount of tokens it wants to maintain
-contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
+contract TokenBuyerV2 is Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20Metadata;
 
     /**
@@ -39,8 +39,6 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
      */
 
-    error FailedSendingETH(bytes data);
-    error FailedWithdrawingETH(bytes data);
     error ReceivedInsufficientTokens(uint256 expected, uint256 actual);
     error OnlyAdminOrOwner();
     error InvalidBotDiscountBPs();
@@ -52,10 +50,9 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
      */
 
-    event SoldSTETH(address indexed to, uint256 ethOut, uint256 tokenIn);
+    event SwappedTokens(address indexed to, uint256 sellTokenOut, uint256 paymentTokenIn);
     event BotDiscountBPsSet(uint16 oldBPs, uint16 newBPs);
     event BaselinePaymentTokenAmountSet(uint256 oldAmount, uint256 newAmount);
-    event ETHWithdrawn(address indexed to, uint256 amount);
     event MinAdminBotDiscountBPsSet(uint16 oldBPs, uint16 newBPs);
     event MaxAdminBotDiscountBPsSet(uint16 oldBPs, uint16 newBPs);
     event MinAdminBaselinePaymentTokenAmountSet(uint256 oldAmount, uint256 newAmount);
@@ -72,13 +69,17 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
 
     uint256 public constant MAX_BPS = 10_000;
 
-    /// @notice The ERC20 token the owner of this contract wants to exchange for ETH
+    /// @notice The ERC20 token the owner of this contract wants to exchange for the sellToken
     IERC20Metadata public immutable paymentToken;
 
-    IERC20Metadata public immutable stETH;
+    /// @notice The ERC20 token the contract will sell in exchange for paymentToken
+    IERC20Metadata public immutable sellToken;
 
-    /// @notice 10**paymentTokenDecimals, for the calculation for ETH price
-    uint256 public immutable paymentTokenDecimalsDigits;
+    /// @notice 1 unit of sellToken, e.g. 10^6 for USDC
+    uint256 public immutable sellTokenUnit;
+
+    /// @notice 1 unit of paymentToken, e.g. 10^6 for USDC
+    uint256 public immutable paymentTokenUnit;
 
     /**
      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
@@ -146,14 +147,14 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
         address _owner,
         address _admin,
         address _payer,
-        address _stETH,
+        address _sellToken,
         address _treasury
     ) {
         payer = IPayer(_payer);
 
         address _paymentToken = address(payer.paymentToken());
         paymentToken = IERC20Metadata(_paymentToken);
-        paymentTokenDecimalsDigits = 10**IERC20Metadata(_paymentToken).decimals();
+        paymentTokenUnit = 10**IERC20Metadata(_paymentToken).decimals();
         priceFeed = _priceFeed;
 
         baselinePaymentTokenAmount = _baselinePaymentTokenAmount;
@@ -173,7 +174,8 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
 
         _transferOwnership(_owner);
         admin = _admin;
-        stETH = IERC20Metadata(_stETH);
+        sellToken = IERC20Metadata(_sellToken);
+        sellTokenUnit = 10**IERC20Metadata(_sellToken).decimals();
         treasury = _treasury;
     }
 
@@ -183,13 +185,13 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
      */
 
-    /// @notice Buy STETH from this contract in exchange for `paymentToken` tokens.
+    /// @notice Buy `sellToken` from this contract in exchange for `paymentToken` tokens.
     /// The price is determined using `priceFeed` plus `botDiscountBPs`
     /// Immediately invokes `payer` to pay back outstanding debt
     /// @dev Caps `tokenAmount` by the amount of tokens the contract needs
-    /// @param tokenAmount the amount of ERC20 tokens msg.sender wishes to sell to this contract in exchange for ETH
-    function buySTETH(uint256 tokenAmount) external nonReentrant whenNotPaused {
-        uint256 amount = Math.min(tokenAmount, tokenAmountNeeded());
+    /// @param paymentTokenAmount the amount of ERC20 tokens msg.sender wishes to sell to this contract
+    function swapTokens(uint256 paymentTokenAmount) external nonReentrant whenNotPaused {
+        uint256 amount = Math.min(paymentTokenAmount, paymentTokenAmountNeeded());
 
         // Cache payer
         IPayer _payer = payer;
@@ -201,36 +203,36 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
         _payer.payBackDebt(amount);
 
         // Send msg.sender STETH
-        uint256 ethAmount = stethAmountPerTokenAmount(amount);
-        safeSendSTETH(msg.sender, ethAmount);
+        uint256 sellTokenAmount = sellTokenAmountPerPaymentTokenAmount(amount);
+        safeSendSellToken(msg.sender, sellTokenAmount);
 
-        emit SoldSTETH(msg.sender, ethAmount, amount);
+        emit SwappedTokens(msg.sender, sellTokenAmount, amount);
     }
 
-    /// @notice Buy ETH from this contract in exchange for `paymentToken` tokens.
+    /// @notice Buy sellToken tokens from this contract in exchange for `paymentToken` tokens.
     /// The price is determined using `priceFeed` plus `botDiscountBPs`
     /// Immediately invokes `payer` to pay back outstanding debt
-    /// @dev First sends ETH by calling a callback, and then checks it received tokens.
-    /// This allowed the caller to swap the ETH for tokens instead of holding tokens in advance
-    /// @param tokenAmount the amount of ERC20 tokens msg.sender wishes to sell to this contract in exchange for ETH
-    /// @param to the address to send ETH to by calling the callback function on it
+    /// @dev First sends sellToken by calling a callback, and then checks it received payment tokens.
+    /// This allowed the caller to swap the sellToken for tokens instead of holding tokens in advance.
+    /// @param paymentTokenAmount the amount of paymentToken tokens msg.sender wishes to sell to this contract in exchange for sellToken
+    /// @param to the address to send sellToken to by calling the callback function on it
     /// @param data arbitrary data passed through by the caller, usually used for callback verification
-    function buySTETH(
-        uint256 tokenAmount,
+    function swapTokens(
+        uint256 paymentTokenAmount,
         address to,
         bytes calldata data
     ) external nonReentrant whenNotPaused {
-        uint256 amount = Math.min(tokenAmount, tokenAmountNeeded());
+        uint256 amount = Math.min(paymentTokenAmount, paymentTokenAmountNeeded());
 
         IPayer _payer = payer;
 
         // Starting balance of `payer`
         uint256 balanceBefore = paymentToken.balanceOf(address(_payer));
 
-        // Send ETH to `to`
-        uint256 ethAmount = stethAmountPerTokenAmount(amount);
-        safeSendSTETH(to, ethAmount);
-        IBuyETHCallback(to).buyETHCallback(msg.sender, amount, data);
+        // Send sellToken to `to`
+        uint256 sellTokenAmount = sellTokenAmountPerPaymentTokenAmount(amount);
+        safeSendSellToken(to, sellTokenAmount);
+        ISwapTokensCallback(to).swapTokensCallback(msg.sender, amount, data);
 
         // Check that `payers` balance increased by the expected amount
         uint256 tokensReceived = paymentToken.balanceOf(address(_payer)) - balanceBefore;
@@ -241,7 +243,7 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
         // Invoke `payer` to pay back outstanding debt
         _payer.payBackDebt(tokensReceived);
 
-        emit SoldSTETH(to, ethAmount, tokensReceived);
+        emit SwappedTokens(to, sellTokenAmount, tokensReceived);
     }
 
     /**
@@ -250,24 +252,26 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
      */
 
-    /// @notice Get how much additional STETH allowance this contract needs in order to fund its current obligations plus `additionalTokens`.
-    /// @param additionalTokens an additional amount of `paymentToken` liability to use in this STETH requirement calculation, in payment token decimals.
-    /// @return the amount of additional STETH allowance needed
-    function stethNeeded(uint256 additionalTokens) public view returns (uint256) {
-        uint256 tokenAmount = tokenAmountNeeded() + additionalTokens;
-        uint256 ethCostOfTokens = stethAmountPerTokenAmount(tokenAmount);
-        uint256 stETHAllowance = stETH.allowance(treasury, address(this));
-
-        if (stETHAllowance > ethCostOfTokens) {
-            return 0;
-        } else {
-            return ethCostOfTokens - stETHAllowance;
-        }
+    /// @notice Get how much additional sellToken balance or allowance this contract needs in order to fund its current obligations plus `additionalTokens`.
+    /// @param additionalTokens an additional amount of `paymentToken` liability to use in this sellToken requirement calculation.
+    /// @return insufficientBalance the amount of additional sellToken the treasury needs
+    /// @return insufficientAllowance the amount of additional sellToken allowance this contract needs
+    function sellTokenNeeded(uint256 additionalTokens)
+        public
+        view
+        returns (uint256 insufficientBalance, uint256 insufficientAllowance)
+    {
+        uint256 paymentTokenAmount = paymentTokenAmountNeeded() + additionalTokens;
+        uint256 sellTokenAmount = sellTokenAmountPerPaymentTokenAmount(paymentTokenAmount);
+        uint256 sellTokenBalance = sellToken.balanceOf(treasury);
+        uint256 sellTokenAllowance = sellToken.allowance(treasury, address(this));
+        insufficientBalance = sellTokenAmount > sellTokenBalance ? sellTokenAmount - sellTokenBalance : 0;
+        insufficientAllowance = sellTokenAmount > sellTokenAllowance ? sellTokenAmount - sellTokenAllowance : 0;
     }
 
-    /// @notice Returns the amount of tokens this contract is willing to exchange of ETH
+    /// @notice Returns the amount of payment tokens this contract is willing to swap
     /// @return amount of tokens
-    function tokenAmountNeeded() public view returns (uint256) {
+    function paymentTokenAmountNeeded() public view returns (uint256) {
         IPayer _payer = payer;
         uint256 _tokensAvailable = paymentToken.balanceOf(address(_payer));
         uint256 totalDebt = _payer.totalDebt();
@@ -280,7 +284,7 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
         }
     }
 
-    /// @notice Returns the ETH/`paymentToken` price this contract is willing to exchange ETH at, including the discount
+    /// @notice Returns the `sellToken`/`paymentToken` price this contract is willing to swapp at, including the discount
     /// @return The price, in 18 decimal format
     function price() public view returns (uint256) {
         unchecked {
@@ -288,47 +292,50 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
         }
     }
 
-    /// @notice Returns the amount of ETH this contract will send in exchange for `tokenAmount` tokens
-    /// @param tokenAmount the amount of tokens
-    /// @return amount of ETH the contract will sell for `tokenAmount` of tokens
-    function stethAmountPerTokenAmount(uint256 tokenAmount) public view returns (uint256) {
+    /// @notice Returns the amount of sellToken this contract will send in exchange for `tokenAmount` payment tokens
+    /// @param paymentTokenAmount the amount of paymentToken tokens
+    /// @return amount of sellToken the contract will sell for `tokenAmount` of payment tokens
+    function sellTokenAmountPerPaymentTokenAmount(uint256 paymentTokenAmount) public view returns (uint256) {
         unchecked {
             // Example:
-            // if tokenAmount == 3400000000 (3400 USDC) (6 decimals)
+            // if paymentTokenAmount == 3400000000 (3400 USDC) (6 decimals)
             // and price() == 1745910000000000000000 (1745.91) (18 decimals)
             // ((3400000000 * 1e36) / 1745910000000000000000) / 1e6 = 1.947408515e18 (3400/1745.91)
-            return ((tokenAmount * 1e36) / price()) / paymentTokenDecimalsDigits;
+            return ((paymentTokenAmount * 1e18 * sellTokenUnit) / price()) / paymentTokenUnit;
         }
     }
 
-    /// @notice Returns the amount of tokens the contract can buy and the amount of STETH it will pay for it
-    /// This takes into account the current STETH allowance this contract has
-    /// @return tokenAmount amount of tokens the contract can buy
-    /// @return stethAmount amount of STETH it will pay for the tokens
-    function tokenAmountNeededAndSTETHPayout() public view returns (uint256, uint256) {
-        uint256 tokenAmount = tokenAmountNeeded();
-        uint256 stethAmount = stethAmountPerTokenAmount(tokenAmount);
-        uint256 stethAvailable = stETH.allowance(treasury, address(this));
+    /// @notice Returns the amount of payment tokens the contract can buy and the amount of sellToken it will pay for it
+    /// This takes into account the current sellToken allowance this contract has and the treasury balance
+    /// @return paymentTokenAmount amount of tokens the contract can buy
+    /// @return sellTokenAmount amount of STETH it will pay for the tokens
+    function paymentTokenAmountNeededAndSellTokenPayout() public view returns (uint256, uint256) {
+        uint256 paymentTokenAmount = paymentTokenAmountNeeded();
+        uint256 sellTokenAmount = sellTokenAmountPerPaymentTokenAmount(paymentTokenAmount);
+        uint256 sellTokenAvailable = Math.min(
+            sellToken.balanceOf(treasury),
+            sellToken.allowance(treasury, address(this))
+        );
 
-        if (stethAvailable >= stethAmount) {
-            return (tokenAmount, stethAmount);
+        if (sellTokenAvailable >= sellTokenAmount) {
+            return (paymentTokenAmount, sellTokenAmount);
         } else {
             // Tokens amount will be rounded down to avoid trying to buy more eth than available
-            tokenAmount = tokenAmountPerSTEthAmount(stethAvailable);
+            paymentTokenAmount = paymentTokenAmountPerSellTokenAmount(sellTokenAvailable);
 
             // Recalculate eth amount because tokens amount are rounded down
-            stethAmount = stethAmountPerTokenAmount(tokenAmount);
+            sellTokenAmount = sellTokenAmountPerPaymentTokenAmount(paymentTokenAmount);
 
-            return (tokenAmount, stethAmount);
+            return (paymentTokenAmount, sellTokenAmount);
         }
     }
 
-    /// @notice Returns the amount of tokens the contract expects in return for steth
-    /// @param stethAmount amount of STETH contract to be swapped
-    /// @return amount of tokens the contract will sell the ETH for
+    /// @notice Returns the amount of payment tokens the contract expects in return for sellToken
+    /// @param sellTokenAmount amount of sellToken to be swapped
+    /// @return amount of tokens the contract will swap sellToken for
     /// @dev result is rounded down
-    function tokenAmountPerSTEthAmount(uint256 stethAmount) public view returns (uint256) {
-        return (stethAmount * price() * paymentTokenDecimalsDigits) / 1e36;
+    function paymentTokenAmountPerSellTokenAmount(uint256 sellTokenAmount) public view returns (uint256) {
+        return (sellTokenAmount * price() * paymentTokenUnit) / (1e18 * sellTokenUnit);
     }
 
     /**
@@ -446,7 +453,7 @@ contract STETHTokenBuyer is Ownable, Pausable, ReentrancyGuard {
      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
      */
 
-    function safeSendSTETH(address to, uint256 ethAmount) internal {
-        stETH.safeTransferFrom(treasury, to, ethAmount);
+    function safeSendSellToken(address to, uint256 ethAmount) internal {
+        sellToken.safeTransferFrom(treasury, to, ethAmount);
     }
 }

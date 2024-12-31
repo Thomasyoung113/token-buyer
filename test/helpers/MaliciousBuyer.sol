@@ -3,6 +3,7 @@ pragma solidity ^0.8.17;
 
 import { IERC20 } from 'openzeppelin-contracts/contracts/token/ERC20/IERC20.sol';
 import { IBuyETHCallback } from '../../src/IBuyETHCallback.sol';
+import { ISwapTokensCallback } from '../../src/ISwapTokensCallback.sol';
 import 'forge-std/console.sol';
 
 interface TokenBuyerLike {
@@ -15,10 +16,10 @@ interface TokenBuyerLike {
     ) external;
 }
 
-interface STETHTokenBuyerLike {
-    function buySTETH(uint256 tokenAmountWAD) external;
+interface TokenBuyerV2Like {
+    function swapTokens(uint256 tokenAmountWAD) external;
 
-    function buySTETH(
+    function swapTokens(
         uint256 tokenAmountWAD,
         address to,
         bytes calldata data
@@ -77,32 +78,32 @@ contract MaliciousBuyer is IBuyETHCallback {
     }
 }
 
-contract STETHMaliciousBuyer is IBuyETHCallback {
-    STETHTokenBuyerLike buyer;
+contract MaliciousBuyerV2 is ISwapTokensCallback {
+    TokenBuyerV2Like buyer;
     IERC20 token;
     bool calledTwice;
     bool reenterWithCallback;
 
     constructor(address _buyer, IERC20 _token) {
-        buyer = STETHTokenBuyerLike(_buyer);
+        buyer = TokenBuyerV2Like(_buyer);
         token = _token;
     }
 
     function attack(uint256 tokenAmountWAD) public {
-        buyer.buySTETH(tokenAmountWAD);
+        buyer.swapTokens(tokenAmountWAD);
     }
 
     function reenterBuyWithCallback(uint256 tokenAmountWAD) public {
         reenterWithCallback = true;
-        buyer.buySTETH(tokenAmountWAD, address(this), '');
+        buyer.swapTokens(tokenAmountWAD, address(this), '');
     }
 
     function reenterBuyNoCallback(uint256 tokenAmountWAD) public {
         reenterWithCallback = false;
-        buyer.buySTETH(tokenAmountWAD, address(this), '');
+        buyer.swapTokens(tokenAmountWAD, address(this), '');
     }
 
-    function buyETHCallback(
+    function swapTokensCallback(
         address,
         uint256 amount,
         bytes calldata
@@ -110,13 +111,13 @@ contract STETHMaliciousBuyer is IBuyETHCallback {
         if (reenterWithCallback) {
             if (!calledTwice) {
                 calledTwice = true;
-                buyer.buySTETH(amount, address(this), '');
+                buyer.swapTokens(amount, address(this), '');
             } else {
                 token.transfer(address(buyer), amount);
             }
         } else {
             token.approve(address(buyer), amount);
-            buyer.buySTETH(amount);
+            buyer.swapTokens(amount);
         }
     }
 }

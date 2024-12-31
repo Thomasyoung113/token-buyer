@@ -2,20 +2,20 @@
 pragma solidity ^0.8.17;
 
 import 'forge-std/Test.sol';
-import { STETHTokenBuyer } from '../src/STETHTokenBuyer.sol';
+import { TokenBuyerV2 } from '../src/TokenBuyerV2.sol';
 import { Payer } from '../src/Payer.sol';
 import { TestERC20 } from './helpers/TestERC20.sol';
 import { TestPriceFeed } from './helpers/TestPriceFeed.sol';
-import { STETHMaliciousBuyer } from './helpers/MaliciousBuyer.sol';
-import { IBuyETHCallback } from '../src/IBuyETHCallback.sol';
-import { STETHBuyerBot } from './helpers/STETHBuyerBot.sol';
+import { MaliciousBuyerV2 } from './helpers/MaliciousBuyer.sol';
+import { ISwapTokensCallback } from '../src/ISwapTokensCallback.sol';
+import { BuyerBot } from './helpers/BuyerBot.sol';
 
-contract STETHTokenBuyerTest is Test {
+contract TokenBuyerV2Test is Test {
     bytes constant STUB_CALLDATA = 'stub calldata';
     bytes constant OWNABLE_ERROR_STRING = 'Ownable: caller is not the owner';
     bytes4 constant ERROR_SELECTOR = 0x08c379a0; // See: https://docs.soliditylang.org/en/v0.8.16/control-structures.html?highlight=0x08c379a0
 
-    event SoldSTETH(address indexed to, uint256 ethOut, uint256 tokenIn);
+    event SwappedTokens(address indexed to, uint256 ethOut, uint256 tokenIn);
     event BotDiscountBPsSet(uint16 oldBPs, uint16 newBPs);
     event BaselinePaymentTokenAmountSet(uint256 oldAmount, uint256 newAmount);
     // event ETHWithdrawn(address indexed to, uint256 amount);
@@ -27,10 +27,10 @@ contract STETHTokenBuyerTest is Test {
     event PayerSet(address oldPayer, address newPayer);
     event AdminSet(address oldAdmin, address newAdmin);
 
-    STETHTokenBuyer buyer;
+    TokenBuyerV2 buyer;
     Payer payer;
     TestERC20 paymentToken;
-    TestERC20 stETH;
+    TestERC20 sellToken;
     TestPriceFeed priceFeed;
 
     uint256 baselinePaymentTokenAmount = 0;
@@ -41,7 +41,7 @@ contract STETHTokenBuyerTest is Test {
     address bot = address(0x99);
     address user = address(0x1234);
     address botOperator = address(0x4444);
-    STETHBuyerBot callbackBot;
+    BuyerBot callbackBot;
 
     function setUp() public {
         vm.label(owner, 'owner');
@@ -49,11 +49,11 @@ contract STETHTokenBuyerTest is Test {
         vm.label(bot, 'bot');
         vm.label(user, 'user');
         paymentToken = new TestERC20('Payment Token', 'PAY', 18);
-        stETH = new TestERC20('stETH', 'stETH', 18);
-        stETH.mint(treasury, 10000 ether);
+        sellToken = new TestERC20('sellToken', 'sellToken', 18);
+        sellToken.mint(treasury, 10000 ether);
         priceFeed = new TestPriceFeed();
         payer = new Payer(owner, address(paymentToken));
-        buyer = new STETHTokenBuyer({
+        buyer = new TokenBuyerV2({
             _priceFeed: priceFeed,
             _baselinePaymentTokenAmount: baselinePaymentTokenAmount,
             _minAdminBaselinePaymentTokenAmount: 0,
@@ -64,17 +64,17 @@ contract STETHTokenBuyerTest is Test {
             _owner: owner,
             _admin: admin,
             _payer: address(payer),
-            _stETH: address(stETH),
+            _sellToken: address(sellToken),
             _treasury: treasury
         });
-        callbackBot = new STETHBuyerBot(address(payer), address(paymentToken), STUB_CALLDATA, botOperator);
+        callbackBot = new BuyerBot(address(payer), address(paymentToken), STUB_CALLDATA, botOperator);
     }
 
     function test_bpsUnder_10000() public {
         uint16 bpsTooHigh = 10001;
 
-        vm.expectRevert(STETHTokenBuyer.InvalidBotDiscountBPs.selector);
-        buyer = new STETHTokenBuyer({
+        vm.expectRevert(TokenBuyerV2.InvalidBotDiscountBPs.selector);
+        buyer = new TokenBuyerV2({
             _priceFeed: priceFeed,
             _baselinePaymentTokenAmount: baselinePaymentTokenAmount,
             _minAdminBaselinePaymentTokenAmount: 0,
@@ -85,12 +85,12 @@ contract STETHTokenBuyerTest is Test {
             _owner: owner,
             _admin: admin,
             _payer: address(payer),
-            _stETH: address(0),
+            _sellToken: address(0),
             _treasury: address(0)
         });
 
-        vm.expectRevert(STETHTokenBuyer.InvalidBotDiscountBPs.selector);
-        buyer = new STETHTokenBuyer({
+        vm.expectRevert(TokenBuyerV2.InvalidBotDiscountBPs.selector);
+        buyer = new TokenBuyerV2({
             _priceFeed: priceFeed,
             _baselinePaymentTokenAmount: baselinePaymentTokenAmount,
             _minAdminBaselinePaymentTokenAmount: 0,
@@ -101,12 +101,12 @@ contract STETHTokenBuyerTest is Test {
             _owner: owner,
             _admin: admin,
             _payer: address(payer),
-            _stETH: address(0),
+            _sellToken: address(0),
             _treasury: address(0)
         });
 
-        vm.expectRevert(STETHTokenBuyer.InvalidBotDiscountBPs.selector);
-        buyer = new STETHTokenBuyer({
+        vm.expectRevert(TokenBuyerV2.InvalidBotDiscountBPs.selector);
+        buyer = new TokenBuyerV2({
             _priceFeed: priceFeed,
             _baselinePaymentTokenAmount: baselinePaymentTokenAmount,
             _minAdminBaselinePaymentTokenAmount: 0,
@@ -117,7 +117,7 @@ contract STETHTokenBuyerTest is Test {
             _owner: owner,
             _admin: admin,
             _payer: address(payer),
-            _stETH: address(0),
+            _sellToken: address(0),
             _treasury: address(0)
         });
     }
@@ -148,20 +148,20 @@ contract STETHTokenBuyerTest is Test {
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(100_000e18);
 
-        assertEq(buyer.tokenAmountNeeded(), 100_000e18);
+        assertEq(buyer.paymentTokenAmountNeeded(), 100_000e18);
     }
 
     function test_tokenAmountNeeded_debtOnly() public {
         vm.prank(address(owner));
         payer.sendOrRegisterDebt(address(1), 42_000e18);
 
-        assertEq(buyer.tokenAmountNeeded(), 42_000e18);
+        assertEq(buyer.paymentTokenAmountNeeded(), 42_000e18);
     }
 
     function test_tokenAmountNeeded_paymentTokenBalanceOnly() public {
         paymentToken.mint(address(payer), 42_000e18);
 
-        assertEq(buyer.tokenAmountNeeded(), 0);
+        assertEq(buyer.paymentTokenAmountNeeded(), 0);
     }
 
     function test_tokenAmountNeeded_baselineAndPaymentTokenBalance() public {
@@ -169,7 +169,7 @@ contract STETHTokenBuyerTest is Test {
         buyer.setBaselinePaymentTokenAmount(100_000e18);
         paymentToken.mint(address(payer), 42_000e18);
 
-        assertEq(buyer.tokenAmountNeeded(), 58_000e18);
+        assertEq(buyer.paymentTokenAmountNeeded(), 58_000e18);
     }
 
     function test_tokenAmountNeeded_baselineAndPaymentTokenBalanceAndDebt() public {
@@ -180,48 +180,48 @@ contract STETHTokenBuyerTest is Test {
 
         paymentToken.mint(address(payer), 42_000e18);
 
-        assertEq(buyer.tokenAmountNeeded(), 69_000e18);
+        assertEq(buyer.paymentTokenAmountNeeded(), 69_000e18);
     }
 
-    function test_tokenAmountPerEthAmount() public {
+    function test_tokenAmountPerSellTokenAmount() public {
         priceFeed.setPrice(1358.37e18);
         uint256 ethAmount = 1.333 ether;
-        uint256 tokenAmount = buyer.tokenAmountPerSTEthAmount(ethAmount);
+        uint256 tokenAmount = buyer.paymentTokenAmountPerSellTokenAmount(ethAmount);
 
         assertEq(tokenAmount, 1810.70721e18);
     }
 
-    function test_tokenAmountPerEthAmount_roundsDown() public {
+    function test_tokenAmountPerSellTokenAmount_roundsDown() public {
         uint256 ethAmount = 100000000000000000; // 0.1 ether
         uint256 price = 111111111111111111111; //  111.111111111111111111
 
         priceFeed.setPrice(price);
 
-        uint256 tokenAmount = buyer.tokenAmountPerSTEthAmount(ethAmount);
-        uint256 ethAmount2 = buyer.stethAmountPerTokenAmount(tokenAmount);
+        uint256 tokenAmount = buyer.paymentTokenAmountPerSellTokenAmount(ethAmount);
+        uint256 ethAmount2 = buyer.sellTokenAmountPerPaymentTokenAmount(tokenAmount);
 
         assertLt(ethAmount2, ethAmount);
     }
 
-    function test_tokenAmountNeededAndETHPayout_baselineAmountOnly() public {
+    function test_tokenAmountNeededAndSellTokenPayout_baselineAmountOnly() public {
         vm.prank(treasury);
-        stETH.approve(address(buyer), 50 ether);
+        sellToken.approve(address(buyer), 50 ether);
 
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(100_000e18);
         priceFeed.setPrice(2000e18);
 
-        (uint256 tokenAmount, uint256 ethAmount) = buyer.tokenAmountNeededAndSTETHPayout();
+        (uint256 tokenAmount, uint256 ethAmount) = buyer.paymentTokenAmountNeededAndSellTokenPayout();
 
         assertEq(tokenAmount, 100_000e18);
         assertEq(ethAmount, 50 ether);
     }
 
-    function test_tokenAmountNeededAndETHPayout_lowersTokensIfItBuysMoreEthThanAvailable() public {
+    function test_tokenAmountNeededAndSellTokenPayout_lowersTokensIfItBuysMoreEthThanAvailable() public {
         paymentToken = new TestERC20('A', 'B', 6);
         payer = new Payer(owner, address(paymentToken));
 
-        buyer = new STETHTokenBuyer({
+        buyer = new TokenBuyerV2({
             _priceFeed: priceFeed,
             _baselinePaymentTokenAmount: baselinePaymentTokenAmount,
             _minAdminBaselinePaymentTokenAmount: 0,
@@ -232,7 +232,7 @@ contract STETHTokenBuyerTest is Test {
             _owner: owner,
             _admin: admin,
             _payer: address(payer),
-            _stETH: address(stETH),
+            _sellToken: address(sellToken),
             _treasury: treasury
         });
 
@@ -240,31 +240,31 @@ contract STETHTokenBuyerTest is Test {
         buyer.setBaselinePaymentTokenAmount(100_000e6);
 
         vm.prank(treasury);
-        stETH.approve(address(buyer), 8 ether);
+        sellToken.approve(address(buyer), 8 ether);
 
         priceFeed.setPrice(1350717518812290000000);
-        (uint256 tokenAmount, uint256 ethAmount) = buyer.tokenAmountNeededAndSTETHPayout();
+        (uint256 tokenAmount, uint256 ethAmount) = buyer.paymentTokenAmountNeededAndSellTokenPayout();
 
-        uint256 ethAmount2 = buyer.stethAmountPerTokenAmount(tokenAmount);
+        uint256 ethAmount2 = buyer.sellTokenAmountPerPaymentTokenAmount(tokenAmount);
 
         assertEq(ethAmount, ethAmount2);
     }
 
-    function test_tokenAmountNeededAndETHPayout_lowersTokensIfItBuysMoreEthThanAvailable_fuzz(
-        uint256 stethAllowance,
+    function test_tokenAmountNeededAndSellTokenPayout_lowersTokensIfItBuysMoreEthThanAvailable_fuzz(
+        uint256 sellTokenAllowance,
         uint256 price,
         uint256 decimals,
         uint256 tokensNeeded
     ) public {
         decimals = bound(decimals, 6, 18);
-        stethAllowance = bound(stethAllowance, 0, 1e12 ether);
+        sellTokenAllowance = bound(sellTokenAllowance, 0, 1e12 ether);
         price = bound(price, 1e18, 1e9 * 1e18);
         tokensNeeded = bound(tokensNeeded, 0, (10_000_000 * 10) ^ decimals);
 
         paymentToken = new TestERC20('A', 'B', uint8(decimals));
         payer = new Payer(owner, address(paymentToken));
 
-        buyer = new STETHTokenBuyer({
+        buyer = new TokenBuyerV2({
             _priceFeed: priceFeed,
             _baselinePaymentTokenAmount: baselinePaymentTokenAmount,
             _minAdminBaselinePaymentTokenAmount: 0,
@@ -275,7 +275,7 @@ contract STETHTokenBuyerTest is Test {
             _owner: owner,
             _admin: admin,
             _payer: address(payer),
-            _stETH: address(stETH),
+            _sellToken: address(sellToken),
             _treasury: treasury
         });
 
@@ -283,25 +283,44 @@ contract STETHTokenBuyerTest is Test {
         buyer.setBaselinePaymentTokenAmount(tokensNeeded);
 
         vm.prank(treasury);
-        stETH.approve(address(buyer), stethAllowance);
+        sellToken.approve(address(buyer), sellTokenAllowance);
 
         priceFeed.setPrice(price);
-        (uint256 tokenAmount, uint256 ethAmount) = buyer.tokenAmountNeededAndSTETHPayout();
+        (uint256 tokenAmount, uint256 sellTokenAmount) = buyer.paymentTokenAmountNeededAndSellTokenPayout();
 
-        uint256 ethAmount2 = buyer.stethAmountPerTokenAmount(tokenAmount);
+        uint256 sellTokenAmount2 = buyer.sellTokenAmountPerPaymentTokenAmount(tokenAmount);
 
-        assertEq(ethAmount, ethAmount2);
+        assertEq(sellTokenAmount, sellTokenAmount2);
     }
 
-    function test_tokenAmountNeededAndETHPayout_lessEthAvailable() public {
+    function test_tokenAmountNeededAndSellTokenPayout_lessSellTokenApproved() public {
         vm.prank(treasury);
-        stETH.approve(address(buyer), 5 ether);
+        sellToken.approve(address(buyer), 5 ether);
 
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(100_000e18);
         priceFeed.setPrice(2000e18);
 
-        (uint256 tokenAmount, uint256 ethAmount) = buyer.tokenAmountNeededAndSTETHPayout();
+        (uint256 tokenAmount, uint256 ethAmount) = buyer.paymentTokenAmountNeededAndSellTokenPayout();
+
+        assertEq(tokenAmount, 10_000e18);
+        assertEq(ethAmount, 5 ether);
+    }
+
+    function test_tokenAmountNeededAndSellTokenPayout_lessSellTokenAvailable() public {
+        vm.prank(treasury);
+        sellToken.approve(address(buyer), 50 ether);
+
+        // set sellToken balance of treasury to 5 ether
+        vm.startPrank(treasury);
+        sellToken.transfer(address(123), sellToken.balanceOf(treasury) - 5 ether);
+        vm.stopPrank();
+
+        vm.prank(owner);
+        buyer.setBaselinePaymentTokenAmount(100_000e18);
+        priceFeed.setPrice(2000e18);
+
+        (uint256 tokenAmount, uint256 ethAmount) = buyer.paymentTokenAmountNeededAndSellTokenPayout();
 
         assertEq(tokenAmount, 10_000e18);
         assertEq(ethAmount, 5 ether);
@@ -343,7 +362,7 @@ contract STETHTokenBuyerTest is Test {
         buyer.pause();
 
         vm.expectRevert('Pausable: paused');
-        buyer.buySTETH(1234);
+        buyer.swapTokens(1234);
     }
 
     function test_buyETH_botBuysExactBaselineAmount() public {
@@ -351,7 +370,7 @@ contract STETHTokenBuyerTest is Test {
         // 1 / 2000 = 0.0005
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether);
+        sellToken.approve(address(buyer), 1 ether);
         paymentToken.mint(bot, 2000e18);
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(2000e18);
@@ -360,13 +379,13 @@ contract STETHTokenBuyerTest is Test {
         paymentToken.approve(address(buyer), 2000e18);
 
         vm.expectEmit(true, true, true, true);
-        emit SoldSTETH(bot, 1 ether, 2000e18);
-        buyer.buySTETH(2000e18);
+        emit SwappedTokens(bot, 1 ether, 2000e18);
+        buyer.swapTokens(2000e18);
 
         vm.stopPrank();
 
-        assertEq(stETH.balanceOf(bot), 1 ether);
-        assertEq(stETH.balanceOf(treasury), 9999 ether);
+        assertEq(sellToken.balanceOf(bot), 1 ether);
+        assertEq(sellToken.balanceOf(treasury), 9999 ether);
         assertEq(paymentToken.balanceOf(address(payer)), 2000e18);
     }
 
@@ -379,11 +398,11 @@ contract STETHTokenBuyerTest is Test {
         // bot buys ETH for 2000 tokens
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether);
+        sellToken.approve(address(buyer), 1 ether);
         paymentToken.mint(bot, 2000e18);
         vm.startPrank(bot);
         paymentToken.approve(address(buyer), 2000e18);
-        buyer.buySTETH(2000e18);
+        buyer.swapTokens(2000e18);
         vm.stopPrank();
 
         // user has been paid
@@ -394,7 +413,7 @@ contract STETHTokenBuyerTest is Test {
     function test_buyETH_botCappedToBaselineAmount() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether);
+        sellToken.approve(address(buyer), 1 ether);
         paymentToken.mint(bot, 4000e18);
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(2000e18);
@@ -403,15 +422,15 @@ contract STETHTokenBuyerTest is Test {
         paymentToken.approve(address(buyer), 4000e18);
 
         vm.expectEmit(true, true, true, true);
-        emit SoldSTETH(bot, 1 ether, 2000e18);
-        buyer.buySTETH(4000e18);
+        emit SwappedTokens(bot, 1 ether, 2000e18);
+        buyer.swapTokens(4000e18);
         vm.stopPrank();
 
-        assertEq(stETH.balanceOf(bot), 1 ether);
+        assertEq(sellToken.balanceOf(bot), 1 ether);
         assertEq(paymentToken.balanceOf(bot), 2000e18);
     }
 
-    function test_buyETH_revertsWhenContractHasInsufficientSTETHApproval() public {
+    function test_buyETH_revertsWhenContractHasInsufficientSellTokenApproval() public {
         priceFeed.setPrice(2000e18);
         paymentToken.mint(bot, 2000e18);
         vm.prank(owner);
@@ -423,18 +442,18 @@ contract STETHTokenBuyerTest is Test {
 
         vm.prank(bot);
         vm.expectRevert('ERC20: insufficient allowance');
-        buyer.buySTETH(2000e18);
+        buyer.swapTokens(2000e18);
     }
 
-    function test_buyETH_revertsWhenTreasuryHasInsufficientSTETH() public {
+    function test_buyETH_revertsWhenTreasuryHasInsufficientSellToken() public {
         priceFeed.setPrice(2000e18);
         paymentToken.mint(bot, 2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether);
+        sellToken.approve(address(buyer), 1 ether);
         // reduce treasury balance to 0.5 ether
         vm.startPrank(treasury);
-        stETH.transfer(address(123), stETH.balanceOf(treasury) - 0.5 ether);
-        assertEq(stETH.balanceOf(treasury), 0.5 ether);
+        sellToken.transfer(address(123), sellToken.balanceOf(treasury) - 0.5 ether);
+        assertEq(sellToken.balanceOf(treasury), 0.5 ether);
         vm.stopPrank();
 
         vm.prank(owner);
@@ -446,13 +465,13 @@ contract STETHTokenBuyerTest is Test {
 
         vm.prank(bot);
         vm.expectRevert('ERC20: transfer amount exceeds balance');
-        buyer.buySTETH(2000e18);
+        buyer.swapTokens(2000e18);
     }
 
     function test_buyETH_revertsWhenTokenApprovalInsufficient() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether);
+        sellToken.approve(address(buyer), 1 ether);
         paymentToken.mint(bot, 2000e18);
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(2000e18);
@@ -462,7 +481,7 @@ contract STETHTokenBuyerTest is Test {
 
         vm.prank(bot);
         vm.expectRevert('ERC20: insufficient allowance');
-        buyer.buySTETH(2000e18);
+        buyer.swapTokens(2000e18);
     }
 
     function test_buyETHWithCallback_revertsWhenPaused() public {
@@ -471,42 +490,42 @@ contract STETHTokenBuyerTest is Test {
 
         vm.expectRevert('Pausable: paused');
         vm.prank(botOperator);
-        buyer.buySTETH(2000e18, address(callbackBot), STUB_CALLDATA);
+        buyer.swapTokens(2000e18, address(callbackBot), STUB_CALLDATA);
     }
 
     function test_buyETHWithCallback_botBuysExactBaselineAmount() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether);
+        sellToken.approve(address(buyer), 1 ether);
         paymentToken.mint(address(callbackBot), 2000e18);
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(2000e18);
-        uint256 balanceBefore = stETH.balanceOf(address(callbackBot));
+        uint256 balanceBefore = sellToken.balanceOf(address(callbackBot));
 
         vm.expectEmit(true, true, true, true);
-        emit SoldSTETH(address(callbackBot), 1 ether, 2000e18);
+        emit SwappedTokens(address(callbackBot), 1 ether, 2000e18);
 
         vm.prank(botOperator);
-        buyer.buySTETH(2000e18, address(callbackBot), STUB_CALLDATA);
+        buyer.swapTokens(2000e18, address(callbackBot), STUB_CALLDATA);
 
-        assertEq(stETH.balanceOf(address(callbackBot)) - balanceBefore, 1 ether);
+        assertEq(sellToken.balanceOf(address(callbackBot)) - balanceBefore, 1 ether);
     }
 
     function test_buyETHWithCallback_paysBackDebt() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether);
+        sellToken.approve(address(buyer), 1 ether);
         paymentToken.mint(address(callbackBot), 2000e18);
 
         vm.prank(owner);
         payer.sendOrRegisterDebt(user, 2500e18);
 
-        uint256 balanceBefore = stETH.balanceOf(address(callbackBot));
+        uint256 balanceBefore = sellToken.balanceOf(address(callbackBot));
 
         vm.prank(botOperator);
-        buyer.buySTETH(2000e18, address(callbackBot), STUB_CALLDATA);
+        buyer.swapTokens(2000e18, address(callbackBot), STUB_CALLDATA);
 
-        assertEq(stETH.balanceOf(address(callbackBot)) - balanceBefore, 1 ether);
+        assertEq(sellToken.balanceOf(address(callbackBot)) - balanceBefore, 1 ether);
         assertEq(paymentToken.balanceOf(user), 2000e18);
         assertEq(paymentToken.balanceOf(address(payer)), 0);
         assertEq(payer.debtOf(user), 500e18);
@@ -515,23 +534,23 @@ contract STETHTokenBuyerTest is Test {
     function test_buyETHWithCallback_botCappedToBaselineAmount() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether);
+        sellToken.approve(address(buyer), 1 ether);
         paymentToken.mint(address(callbackBot), 4000e18);
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(2000e18);
-        uint256 balanceBefore = stETH.balanceOf(address(callbackBot));
+        uint256 balanceBefore = sellToken.balanceOf(address(callbackBot));
 
         vm.expectEmit(true, true, true, true);
-        emit SoldSTETH(address(callbackBot), 1 ether, 2000e18);
+        emit SwappedTokens(address(callbackBot), 1 ether, 2000e18);
 
         vm.prank(botOperator);
-        buyer.buySTETH(4000e18, address(callbackBot), STUB_CALLDATA);
+        buyer.swapTokens(4000e18, address(callbackBot), STUB_CALLDATA);
 
-        assertEq(stETH.balanceOf(address(callbackBot)) - balanceBefore, 1 ether);
+        assertEq(sellToken.balanceOf(address(callbackBot)) - balanceBefore, 1 ether);
         assertEq(paymentToken.balanceOf(address(callbackBot)), 2000e18);
     }
 
-    function test_buyETHWithCallback_revertsWhenContractHasInsufficientSTETHApproval() public {
+    function test_buyETHWithCallback_revertsWhenContractHasInsufficientSellTokenApproval() public {
         priceFeed.setPrice(2000e18);
         paymentToken.mint(address(callbackBot), 4000e18);
         vm.prank(owner);
@@ -539,22 +558,22 @@ contract STETHTokenBuyerTest is Test {
         // 2000 tokens at 0.0005 price = 1 ether
         // setting the balance to the highest point where it should fail
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether - 1 wei);
+        sellToken.approve(address(buyer), 1 ether - 1 wei);
 
         vm.expectRevert('ERC20: insufficient allowance');
         vm.prank(botOperator);
-        buyer.buySTETH(2000e18, address(callbackBot), STUB_CALLDATA);
+        buyer.swapTokens(2000e18, address(callbackBot), STUB_CALLDATA);
     }
 
-    function test_buyETHWithCallback_revertsWhenTreasuryHasInsufficientSTETH() public {
+    function test_buyETHWithCallback_revertsWhenTreasuryHasInsufficientSellToken() public {
         priceFeed.setPrice(2000e18);
         paymentToken.mint(address(callbackBot), 4000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether);
+        sellToken.approve(address(buyer), 1 ether);
         // reduce treasury balance to 0.5 ether
         vm.startPrank(treasury);
-        stETH.transfer(address(123), stETH.balanceOf(treasury) - 0.5 ether);
-        assertEq(stETH.balanceOf(treasury), 0.5 ether);
+        sellToken.transfer(address(123), sellToken.balanceOf(treasury) - 0.5 ether);
+        assertEq(sellToken.balanceOf(treasury), 0.5 ether);
         vm.stopPrank();
 
         vm.prank(owner);
@@ -562,24 +581,22 @@ contract STETHTokenBuyerTest is Test {
 
         vm.expectRevert('ERC20: transfer amount exceeds balance');
         vm.prank(botOperator);
-        buyer.buySTETH(2000e18, address(callbackBot), STUB_CALLDATA);
+        buyer.swapTokens(2000e18, address(callbackBot), STUB_CALLDATA);
     }
 
     function test_buyETHWithCallback_revertsWhenTokenPaymentInsufficient() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether);
+        sellToken.approve(address(buyer), 1 ether);
         paymentToken.mint(address(callbackBot), 2000e18);
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(2000e18);
         callbackBot.setTokenAmountOverride(2000e18 - 1);
         callbackBot.setOverrideTokenAmount(true);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(STETHTokenBuyer.ReceivedInsufficientTokens.selector, 2000e18, 2000e18 - 1)
-        );
+        vm.expectRevert(abi.encodeWithSelector(TokenBuyerV2.ReceivedInsufficientTokens.selector, 2000e18, 2000e18 - 1));
         vm.prank(botOperator);
-        buyer.buySTETH(2000e18, address(callbackBot), STUB_CALLDATA);
+        buyer.swapTokens(2000e18, address(callbackBot), STUB_CALLDATA);
     }
 
     function test_buyETHWithCallback_usesAllTokensToPayBackDebt() public {
@@ -588,7 +605,7 @@ contract STETHTokenBuyerTest is Test {
 
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1 ether);
+        sellToken.approve(address(buyer), 1 ether);
         paymentToken.mint(address(callbackBot), 2000e18 + 10);
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(2000e18);
@@ -597,17 +614,17 @@ contract STETHTokenBuyerTest is Test {
 
         vm.prank(botOperator);
         vm.expectEmit(true, true, true, true);
-        emit SoldSTETH(address(callbackBot), 1 ether, 2000e18 + 10);
-        buyer.buySTETH(2000e18, address(callbackBot), STUB_CALLDATA);
+        emit SwappedTokens(address(callbackBot), 1 ether, 2000e18 + 10);
+        buyer.swapTokens(2000e18, address(callbackBot), STUB_CALLDATA);
 
         assertEq(paymentToken.balanceOf(address(0x7777)), 2000e18 + 10);
     }
 
     function test_buyETHWithCallback_maliciousBuyerCantReenter() public {
-        STETHMaliciousBuyer attacker = new STETHMaliciousBuyer(address(buyer), paymentToken);
+        MaliciousBuyerV2 attacker = new MaliciousBuyerV2(address(buyer), paymentToken);
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 10 ether);
+        sellToken.approve(address(buyer), 10 ether);
         paymentToken.mint(address(attacker), 2000e18);
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(2000e18);
@@ -617,10 +634,10 @@ contract STETHTokenBuyerTest is Test {
     }
 
     function test_buyETHWithCallback_maliciousBuyerCantReenterOtherBuyETHFunction() public {
-        STETHMaliciousBuyer attacker = new STETHMaliciousBuyer(address(buyer), paymentToken);
+        MaliciousBuyerV2 attacker = new MaliciousBuyerV2(address(buyer), paymentToken);
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 10 ether);
+        sellToken.approve(address(buyer), 10 ether);
         paymentToken.mint(address(attacker), 2000e18);
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(2000e18);
@@ -644,18 +661,18 @@ contract STETHTokenBuyerTest is Test {
         // fund bot and buyer
         paymentToken.mint(bot, 99_990e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1010 ether);
+        sellToken.approve(address(buyer), 1010 ether);
 
         // bots buy buffer
         vm.startPrank(bot);
         paymentToken.approve(address(buyer), 99_990e18);
 
         vm.expectEmit(true, true, true, true);
-        emit SoldSTETH(bot, 1010 ether, 99_990e18);
-        buyer.buySTETH(99_990e18);
+        emit SwappedTokens(bot, 1010 ether, 99_990e18);
+        buyer.swapTokens(99_990e18);
         vm.stopPrank();
         assertEq(paymentToken.balanceOf(bot), 0);
-        assertEq(stETH.balanceOf(bot), 1010 ether);
+        assertEq(sellToken.balanceOf(bot), 1010 ether);
 
         // send or mint (42K)
         vm.prank(owner);
@@ -670,18 +687,18 @@ contract STETHTokenBuyerTest is Test {
 
         // 42000 / 99 = 424.242424242
         vm.prank(treasury);
-        stETH.approve(address(buyer), 424242424242424242424);
+        sellToken.approve(address(buyer), 424242424242424242424);
 
         // bots can top off what's missing (bots buy 42K)
         vm.startPrank(bot);
         paymentToken.approve(address(buyer), 42_000e18);
 
         vm.expectEmit(true, true, true, true);
-        emit SoldSTETH(bot, 424242424242424242424, 42_000e18);
-        buyer.buySTETH(42_000e18);
+        emit SwappedTokens(bot, 424242424242424242424, 42_000e18);
+        buyer.swapTokens(42_000e18);
         vm.stopPrank();
         assertEq(paymentToken.balanceOf(bot), 0);
-        assertEq(stETH.balanceOf(bot), 1010 ether + 424242424242424242424);
+        assertEq(sellToken.balanceOf(bot), 1010 ether + 424242424242424242424);
     }
 
     function test_happyFlow_payingOverTheBuffer() public {
@@ -699,18 +716,18 @@ contract STETHTokenBuyerTest is Test {
         // fund bot and buyer
         paymentToken.mint(bot, 99_990e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1010 ether);
+        sellToken.approve(address(buyer), 1010 ether);
 
         // bots buy buffer
         vm.startPrank(bot);
         paymentToken.approve(address(buyer), 99_990e18);
 
         vm.expectEmit(true, true, true, true);
-        emit SoldSTETH(bot, 1010 ether, 99_990e18);
-        buyer.buySTETH(99_990e18);
+        emit SwappedTokens(bot, 1010 ether, 99_990e18);
+        buyer.swapTokens(99_990e18);
         vm.stopPrank();
         assertEq(paymentToken.balanceOf(bot), 0);
-        assertEq(stETH.balanceOf(bot), 1010 ether);
+        assertEq(sellToken.balanceOf(bot), 1010 ether);
 
         // send or mint (141,990)
         vm.prank(owner);
@@ -723,18 +740,18 @@ contract STETHTokenBuyerTest is Test {
 
         // 42000 / 99 = 424.242424242
         vm.prank(treasury);
-        stETH.approve(address(buyer), 424242424242424242424);
+        sellToken.approve(address(buyer), 424242424242424242424);
 
         // bots can top off what's missing (bots buy 42K)
         vm.startPrank(bot);
         paymentToken.approve(address(buyer), 42_000e18);
 
         vm.expectEmit(true, true, true, true);
-        emit SoldSTETH(bot, 424242424242424242424, 42_000e18);
-        buyer.buySTETH(42_000e18);
+        emit SwappedTokens(bot, 424242424242424242424, 42_000e18);
+        buyer.swapTokens(42_000e18);
         vm.stopPrank();
         assertEq(paymentToken.balanceOf(bot), 0);
-        assertEq(stETH.balanceOf(bot), 1010 ether + 424242424242424242424);
+        assertEq(sellToken.balanceOf(bot), 1010 ether + 424242424242424242424);
 
         // user's debt was paid
         assertEq(payer.debtOf(user), 0);
@@ -744,16 +761,16 @@ contract STETHTokenBuyerTest is Test {
         // fund bot and buyer again
         paymentToken.mint(bot, 99_990e18);
         vm.prank(treasury);
-        stETH.approve(address(buyer), 1010 ether);
+        sellToken.approve(address(buyer), 1010 ether);
         vm.startPrank(bot);
         paymentToken.approve(address(buyer), 99_990e18);
 
         vm.expectEmit(true, true, true, true);
-        emit SoldSTETH(bot, 1010 ether, 99_990e18);
-        buyer.buySTETH(99_990e18);
+        emit SwappedTokens(bot, 1010 ether, 99_990e18);
+        buyer.swapTokens(99_990e18);
         vm.stopPrank();
         assertEq(paymentToken.balanceOf(bot), 0);
-        assertEq(stETH.balanceOf(bot), 1010 ether + 424242424242424242424 + 1010 ether);
+        assertEq(sellToken.balanceOf(bot), 1010 ether + 424242424242424242424 + 1010 ether);
         assertEq(paymentToken.balanceOf(address(payer)), 99_990e18);
     }
 
@@ -761,7 +778,7 @@ contract STETHTokenBuyerTest is Test {
         vm.prank(owner);
         buyer.setMinAdminBaselinePaymentTokenAmount(10_000);
 
-        vm.expectRevert(abi.encodeWithSelector(STETHTokenBuyer.InvalidBaselinePaymentTokenAmount.selector));
+        vm.expectRevert(abi.encodeWithSelector(TokenBuyerV2.InvalidBaselinePaymentTokenAmount.selector));
         vm.prank(admin);
         buyer.setBaselinePaymentTokenAmount(9999);
     }
@@ -770,7 +787,7 @@ contract STETHTokenBuyerTest is Test {
         vm.prank(owner);
         buyer.setMaxAdminBaselinePaymentTokenAmount(10_000);
 
-        vm.expectRevert(abi.encodeWithSelector(STETHTokenBuyer.InvalidBaselinePaymentTokenAmount.selector));
+        vm.expectRevert(abi.encodeWithSelector(TokenBuyerV2.InvalidBaselinePaymentTokenAmount.selector));
         vm.prank(admin);
         buyer.setBaselinePaymentTokenAmount(10_001);
     }
@@ -817,7 +834,7 @@ contract STETHTokenBuyerTest is Test {
         vm.prank(owner);
         buyer.setMinAdminBotDiscountBPs(50);
 
-        vm.expectRevert(abi.encodeWithSelector(STETHTokenBuyer.InvalidBotDiscountBPs.selector));
+        vm.expectRevert(abi.encodeWithSelector(TokenBuyerV2.InvalidBotDiscountBPs.selector));
         vm.prank(admin);
         buyer.setBotDiscountBPs(49);
     }
@@ -826,7 +843,7 @@ contract STETHTokenBuyerTest is Test {
         vm.prank(owner);
         buyer.setMaxAdminBotDiscountBPs(100);
 
-        vm.expectRevert(abi.encodeWithSelector(STETHTokenBuyer.InvalidBotDiscountBPs.selector));
+        vm.expectRevert(abi.encodeWithSelector(TokenBuyerV2.InvalidBotDiscountBPs.selector));
         vm.prank(admin);
         buyer.setBotDiscountBPs(101);
     }
@@ -898,7 +915,7 @@ contract STETHTokenBuyerTest is Test {
     }
 
     function test_setAdmin_revertsForNonOwner() public {
-        vm.expectRevert(abi.encodeWithSelector(STETHTokenBuyer.OnlyAdminOrOwner.selector));
+        vm.expectRevert(abi.encodeWithSelector(TokenBuyerV2.OnlyAdminOrOwner.selector));
         buyer.setAdmin(address(112233));
     }
 
@@ -927,10 +944,10 @@ contract STETHTokenBuyerTest is Test {
     }
 
     function test_pause_unpause_revertForNonOwnerOrAdmin() public {
-        vm.expectRevert(abi.encodeWithSelector(STETHTokenBuyer.OnlyAdminOrOwner.selector));
+        vm.expectRevert(abi.encodeWithSelector(TokenBuyerV2.OnlyAdminOrOwner.selector));
         buyer.pause();
 
-        vm.expectRevert(abi.encodeWithSelector(STETHTokenBuyer.OnlyAdminOrOwner.selector));
+        vm.expectRevert(abi.encodeWithSelector(TokenBuyerV2.OnlyAdminOrOwner.selector));
         buyer.unpause();
     }
 
@@ -1003,24 +1020,47 @@ contract STETHTokenBuyerTest is Test {
         buyer.setMaxAdminBaselinePaymentTokenAmount(42);
     }
 
-    function test_stethNeeded() public {
-        priceFeed.setPrice(1400e18);
+    function test_sellTokenNeeded() public {
+        // set treasury sellToken balance to zero
+        vm.startPrank(treasury);
+        sellToken.transfer(address(123), sellToken.balanceOf(treasury));
+        vm.stopPrank();
 
+        // sellToken/paymentToken = 1000
+        // assert(sellToken.balanceOf(treasury) >)
+        priceFeed.setPrice(1000e18);
         vm.prank(owner);
         buyer.setBaselinePaymentTokenAmount(1_000e18);
+        (uint256 insufficientBalance, uint256 insufficientAllowance) = buyer.sellTokenNeeded(100e18);
 
-        uint256 ethNeeded = buyer.stethNeeded(100e18);
-        assertApproxEqAbs(ethNeeded, 0.785714286e18, 0.00001e18);
-    }
+        assertApproxEqAbs(insufficientBalance, 1.1e18, 0.00001e18);
+        assertApproxEqAbs(insufficientAllowance, 1.1e18, 0.00001e18);
 
-    function test_stethNeededIsZeroIfNothingNeeded() public {
-        priceFeed.setPrice(1400e18);
+        // treasury has partial balance
+        sellToken.mint(treasury, 1.0e18);
 
-        vm.prank(owner);
-        buyer.setBaselinePaymentTokenAmount(1_000e18);
+        (insufficientBalance, insufficientAllowance) = buyer.sellTokenNeeded(100e18);
 
+        assertApproxEqAbs(insufficientBalance, 0.1e18, 0.00001e18);
+        assertApproxEqAbs(insufficientAllowance, 1.1e18, 0.00001e18);
+
+        // partial allowance
         vm.prank(treasury);
-        stETH.approve(address(buyer), 0.8 ether);
-        assertEq(buyer.stethNeeded(100e18), 0);
+        sellToken.approve(address(buyer), 0.9e18);
+
+        (insufficientBalance, insufficientAllowance) = buyer.sellTokenNeeded(100e18);
+
+        assertApproxEqAbs(insufficientBalance, 0.1e18, 0.00001e18);
+        assertApproxEqAbs(insufficientAllowance, 0.2e18, 0.00001e18);
+
+        // more than needed
+        sellToken.mint(treasury, 1.0e18);
+        vm.prank(treasury);
+        sellToken.approve(address(buyer), 1.9e18);
+
+        (insufficientBalance, insufficientAllowance) = buyer.sellTokenNeeded(100e18);
+
+        assertEq(insufficientBalance, 0);
+        assertEq(insufficientAllowance, 0);
     }
 }

@@ -2,10 +2,10 @@
 pragma solidity ^0.8.17;
 
 import 'forge-std/Test.sol';
-import { IBuyETHCallback } from '../../src/IBuyETHCallback.sol';
+import { ISwapTokensCallback } from '../../src/ISwapTokensCallback.sol';
 import { IERC20 } from 'openzeppelin-contracts/contracts/token/ERC20/IERC20.sol';
 
-contract STETHBuyerBot is IBuyETHCallback, Test {
+contract BuyerBot is ISwapTokensCallback, Test {
     address immutable payer;
     IERC20 immutable paymentToken;
 
@@ -26,7 +26,7 @@ contract STETHBuyerBot is IBuyETHCallback, Test {
         operator = operator_;
     }
 
-    function buyETHCallback(
+    function swapTokensCallback(
         address caller,
         uint256 amount,
         bytes memory data
