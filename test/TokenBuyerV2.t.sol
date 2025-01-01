@@ -211,10 +211,10 @@ contract TokenBuyerV2Test is Test {
         buyer.setBaselinePaymentTokenAmount(100_000e18);
         priceFeed.setPrice(2000e18);
 
-        (uint256 tokenAmount, uint256 ethAmount) = buyer.paymentTokenAmountNeededAndSellTokenPayout();
+        (uint256 paymentTokenAmount, uint256 sellTokenAmount) = buyer.paymentTokenAmountNeededAndSellTokenPayout();
 
-        assertEq(tokenAmount, 100_000e18);
-        assertEq(ethAmount, 50 ether);
+        assertEq(paymentTokenAmount, 100_000e18);
+        assertEq(sellTokenAmount, 50 ether);
     }
 
     function test_tokenAmountNeededAndSellTokenPayout_lowersTokensIfItBuysMoreEthThanAvailable() public {
@@ -357,7 +357,7 @@ contract TokenBuyerV2Test is Test {
         assertEq(price, 2121e18);
     }
 
-    function test_buyETH_revertsWhenPaused() public {
+    function test_swapTokens_revertsWhenPaused() public {
         vm.prank(admin);
         buyer.pause();
 
@@ -365,7 +365,7 @@ contract TokenBuyerV2Test is Test {
         buyer.swapTokens(1234);
     }
 
-    function test_buyETH_botBuysExactBaselineAmount() public {
+    function test_swapTokens_botBuysExactBaselineAmount() public {
         // Say ETH is worth $2000, then the oracle price denominated in ETH would be
         // 1 / 2000 = 0.0005
         priceFeed.setPrice(2000e18);
@@ -389,7 +389,7 @@ contract TokenBuyerV2Test is Test {
         assertEq(paymentToken.balanceOf(address(payer)), 2000e18);
     }
 
-    function test_buyETH_paysBackDebt() public {
+    function test_swapTokens_paysBackDebt() public {
         // user has debt of 2000 tokens
         vm.prank(owner);
         payer.sendOrRegisterDebt(user, 2000e18);
@@ -410,7 +410,7 @@ contract TokenBuyerV2Test is Test {
         assertEq(payer.debtOf(user), 0);
     }
 
-    function test_buyETH_botCappedToBaselineAmount() public {
+    function test_swapTokens_botCappedToBaselineAmount() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
         sellToken.approve(address(buyer), 1 ether);
@@ -430,7 +430,7 @@ contract TokenBuyerV2Test is Test {
         assertEq(paymentToken.balanceOf(bot), 2000e18);
     }
 
-    function test_buyETH_revertsWhenContractHasInsufficientSellTokenApproval() public {
+    function test_swapTokens_revertsWhenContractHasInsufficientSellTokenApproval() public {
         priceFeed.setPrice(2000e18);
         paymentToken.mint(bot, 2000e18);
         vm.prank(owner);
@@ -445,7 +445,7 @@ contract TokenBuyerV2Test is Test {
         buyer.swapTokens(2000e18);
     }
 
-    function test_buyETH_revertsWhenTreasuryHasInsufficientSellToken() public {
+    function test_swapTokens_revertsWhenTreasuryHasInsufficientSellToken() public {
         priceFeed.setPrice(2000e18);
         paymentToken.mint(bot, 2000e18);
         vm.prank(treasury);
@@ -468,7 +468,7 @@ contract TokenBuyerV2Test is Test {
         buyer.swapTokens(2000e18);
     }
 
-    function test_buyETH_revertsWhenTokenApprovalInsufficient() public {
+    function test_swapTokens_revertsWhenTokenApprovalInsufficient() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
         sellToken.approve(address(buyer), 1 ether);
@@ -484,7 +484,7 @@ contract TokenBuyerV2Test is Test {
         buyer.swapTokens(2000e18);
     }
 
-    function test_buyETHWithCallback_revertsWhenPaused() public {
+    function test_swapTokensWithCallback_revertsWhenPaused() public {
         vm.prank(admin);
         buyer.pause();
 
@@ -493,7 +493,7 @@ contract TokenBuyerV2Test is Test {
         buyer.swapTokens(2000e18, address(callbackBot), STUB_CALLDATA);
     }
 
-    function test_buyETHWithCallback_botBuysExactBaselineAmount() public {
+    function test_swapTokensWithCallback_botBuysExactBaselineAmount() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
         sellToken.approve(address(buyer), 1 ether);
@@ -511,7 +511,7 @@ contract TokenBuyerV2Test is Test {
         assertEq(sellToken.balanceOf(address(callbackBot)) - balanceBefore, 1 ether);
     }
 
-    function test_buyETHWithCallback_paysBackDebt() public {
+    function test_swapTokensWithCallback_paysBackDebt() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
         sellToken.approve(address(buyer), 1 ether);
@@ -531,7 +531,7 @@ contract TokenBuyerV2Test is Test {
         assertEq(payer.debtOf(user), 500e18);
     }
 
-    function test_buyETHWithCallback_botCappedToBaselineAmount() public {
+    function test_swapTokensWithCallback_botCappedToBaselineAmount() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
         sellToken.approve(address(buyer), 1 ether);
@@ -550,7 +550,7 @@ contract TokenBuyerV2Test is Test {
         assertEq(paymentToken.balanceOf(address(callbackBot)), 2000e18);
     }
 
-    function test_buyETHWithCallback_revertsWhenContractHasInsufficientSellTokenApproval() public {
+    function test_swapTokensWithCallback_revertsWhenContractHasInsufficientSellTokenApproval() public {
         priceFeed.setPrice(2000e18);
         paymentToken.mint(address(callbackBot), 4000e18);
         vm.prank(owner);
@@ -565,7 +565,7 @@ contract TokenBuyerV2Test is Test {
         buyer.swapTokens(2000e18, address(callbackBot), STUB_CALLDATA);
     }
 
-    function test_buyETHWithCallback_revertsWhenTreasuryHasInsufficientSellToken() public {
+    function test_swapTokensWithCallback_revertsWhenTreasuryHasInsufficientSellToken() public {
         priceFeed.setPrice(2000e18);
         paymentToken.mint(address(callbackBot), 4000e18);
         vm.prank(treasury);
@@ -584,7 +584,7 @@ contract TokenBuyerV2Test is Test {
         buyer.swapTokens(2000e18, address(callbackBot), STUB_CALLDATA);
     }
 
-    function test_buyETHWithCallback_revertsWhenTokenPaymentInsufficient() public {
+    function test_swapTokensWithCallback_revertsWhenTokenPaymentInsufficient() public {
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
         sellToken.approve(address(buyer), 1 ether);
@@ -599,7 +599,7 @@ contract TokenBuyerV2Test is Test {
         buyer.swapTokens(2000e18, address(callbackBot), STUB_CALLDATA);
     }
 
-    function test_buyETHWithCallback_usesAllTokensToPayBackDebt() public {
+    function test_swapTokensWithCallback_usesAllTokensToPayBackDebt() public {
         vm.prank(owner);
         payer.sendOrRegisterDebt(address(0x7777), 2000e18 + 10);
 
@@ -620,7 +620,7 @@ contract TokenBuyerV2Test is Test {
         assertEq(paymentToken.balanceOf(address(0x7777)), 2000e18 + 10);
     }
 
-    function test_buyETHWithCallback_maliciousBuyerCantReenter() public {
+    function test_swapTokensWithCallback_maliciousBuyerCantReenter() public {
         MaliciousBuyerV2 attacker = new MaliciousBuyerV2(address(buyer), paymentToken);
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);
@@ -633,7 +633,7 @@ contract TokenBuyerV2Test is Test {
         attacker.reenterBuyWithCallback(2000e18);
     }
 
-    function test_buyETHWithCallback_maliciousBuyerCantReenterOtherBuyETHFunction() public {
+    function test_swapTokensWithCallback_maliciousBuyerCantReenterOtherBuyETHFunction() public {
         MaliciousBuyerV2 attacker = new MaliciousBuyerV2(address(buyer), paymentToken);
         priceFeed.setPrice(2000e18);
         vm.prank(treasury);

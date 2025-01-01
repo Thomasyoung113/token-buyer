@@ -212,8 +212,8 @@ contract TokenBuyerV2 is Ownable, Pausable, ReentrancyGuard {
     /// @notice Buy sellToken tokens from this contract in exchange for `paymentToken` tokens.
     /// The price is determined using `priceFeed` plus `botDiscountBPs`
     /// Immediately invokes `payer` to pay back outstanding debt
-    /// @dev First sends sellToken by calling a callback, and then checks it received payment tokens.
-    /// This allowed the caller to swap the sellToken for tokens instead of holding tokens in advance.
+    /// @dev First sends sellToken to `to`, then invokes the callback afterwhich it checks it received payment tokens.
+    /// This allows the caller to swap the sellToken for tokens instead of holding tokens in advance.
     /// @param paymentTokenAmount the amount of paymentToken tokens msg.sender wishes to sell to this contract in exchange for sellToken
     /// @param to the address to send sellToken to by calling the callback function on it
     /// @param data arbitrary data passed through by the caller, usually used for callback verification
@@ -284,7 +284,7 @@ contract TokenBuyerV2 is Ownable, Pausable, ReentrancyGuard {
         }
     }
 
-    /// @notice Returns the `sellToken`/`paymentToken` price this contract is willing to swapp at, including the discount
+    /// @notice Returns the `sellToken`/`paymentToken` price this contract is willing to swap at, including the discount
     /// @return The price, in 18 decimal format
     function price() public view returns (uint256) {
         unchecked {
@@ -298,9 +298,10 @@ contract TokenBuyerV2 is Ownable, Pausable, ReentrancyGuard {
     function sellTokenAmountPerPaymentTokenAmount(uint256 paymentTokenAmount) public view returns (uint256) {
         unchecked {
             // Example:
+            // if sellTokenUnit == 1e10 (10 decimals)
             // if paymentTokenAmount == 3400000000 (3400 USDC) (6 decimals)
             // and price() == 1745910000000000000000 (1745.91) (18 decimals)
-            // ((3400000000 * 1e36) / 1745910000000000000000) / 1e6 = 1.947408515e18 (3400/1745.91)
+            // ((3400000000 * 1e18 * 1e10) / 1745910000000000000000) / 1e6 = 1.947408515e10 (3400/1745.91)
             return ((paymentTokenAmount * 1e18 * sellTokenUnit) / price()) / paymentTokenUnit;
         }
     }
@@ -453,7 +454,7 @@ contract TokenBuyerV2 is Ownable, Pausable, ReentrancyGuard {
      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
      */
 
-    function safeSendSellToken(address to, uint256 ethAmount) internal {
-        sellToken.safeTransferFrom(treasury, to, ethAmount);
+    function safeSendSellToken(address to, uint256 amount) internal {
+        sellToken.safeTransferFrom(treasury, to, amount);
     }
 }
