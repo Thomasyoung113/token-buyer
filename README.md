@@ -90,3 +90,7 @@ forge script script/DeployUSDC.s.sol:DeployUSDCMainnet --broadcast --verify -vvv
 | TokenBuyer | [0x4f2aCdc74f6941390d9b1804faBc3E780388cfe5](https://etherscan.io/address/0x4f2aCdc74f6941390d9b1804faBc3E780388cfe5) |
 | Payer | [0xd97Bcd9f47cEe35c0a9ec1dc40C1269afc9E8E1D](https://etherscan.io/address/0xd97Bcd9f47cEe35c0a9ec1dc40C1269afc9E8E1D) |
 | PriceFeed | [0x05e651Bc3a7f7B7640cAD61dC383ca28Ae000cce](https://etherscan.io/address/0x05e651Bc3a7f7B7640cAD61dC383ca28Ae000cce) |
+
+## Security
+
+This smart contract has been designed with security in mind. Always verify contract addresses before interacting.
